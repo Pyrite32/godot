@@ -30,14 +30,16 @@
 
 #include "graph_edit_arranger.h"
 
-#include "scene/gui/graph_edit.h"
+GraphEditArranger::GraphEditArranger(GraphEdit *p_edit) {
+    graph_edit = p_edit;
+}
 
 Vector2i GraphEditArranger::get_default_node_position() {
 	return (Vector2i)((graph_edit->get_scroll_offset() + graph_edit->get_size() / 6) / graph_edit->get_zoom() / cell_size);
 }
 
 bool GraphEditArranger::arrange_chunk(GraphNode *p_start_node, Vector2i p_grid_position, Rect2i &p_chunk_rect) {
-	const Rect2i base_value = default;
+	const Rect2i base_value = Rect2i(0,0,0,0);
 	bool is_default = false;
 	while (!is_default) {
 		for (Rect2i rect : chunk_rects) {
@@ -48,17 +50,17 @@ bool GraphEditArranger::arrange_chunk(GraphNode *p_start_node, Vector2i p_grid_p
 			}
 		}
 	}
-	return arrange_node(p_start_node, p_grid_position, &p_chunk_rect);
+	return arrange_node(p_start_node, p_grid_position, p_chunk_rect);
 }
 
 bool GraphEditArranger::arrange_node(GraphNode *p_node, Vector2i p_grid_position, Rect2i &p_chunk_rect) {
-	if (!p_start_node->is_selected()) {
-		return;
+	if (!p_node->is_selected()) {
+		return false;
 	}
 	arranged_nodes.insert(p_node);
 
-	Vector<GraphNode *> input_nodes = get_connected_nodes(node, SlotType::IN_PORT );
-	Vector<GraphNode *> output_nodes = get_connected_nodes(node, SlotType::OUT_PORT);
+	Vector<GraphNode *> input_nodes = get_connected_nodes(p_node, SlotType::IN_PORT);
+	Vector<GraphNode *> output_nodes = get_connected_nodes(p_node, SlotType::OUT_PORT);
 
 	Vector2i final_grid_position;
 
@@ -66,21 +68,24 @@ bool GraphEditArranger::arrange_node(GraphNode *p_node, Vector2i p_grid_position
 	while (true) {
 		final_grid_position = Vector2i(p_grid_position.x, p_grid_position.y + x);
 		bool covers_existing_nodes = false;
-		union_covered_cells(p_node, final_grid_position, &covers_existing_nodes);
+		union_covered_cells(p_node, final_grid_position, covers_existing_nodes);
 		if (covers_existing_nodes) {
 			++x;
 			continue;
 		}
 		add_range_to_covered_cells(p_node, final_grid_position);
-		p_node->set_position_offset(final_grid_position * cell_size) break;
+		p_node->set_position_offset(final_grid_position * cell_size);
+		break;
 	}
 
 	Rect2i total_area = Rect2(p_node->get_position_offset(), p_node->get_size());
 
-	arrange_connected_nodes(output_nodes, final_grid_position + Vector2i(get_node_grid_size(node).x, -get_nodes_grid_size(output_nodes).y / 2), false, &total_area);
-	arrange_connected_nodes(input_nodes, final_grid_position + Vector2i(0, get_nodes_grid_size(input_nodes).y / 2), true, &total_area);
+	arrange_connected_nodes(output_nodes, final_grid_position + Vector2i(get_node_grid_size(p_node).x, -get_nodes_grid_size(output_nodes).y / 2), false, total_area);
+	arrange_connected_nodes(input_nodes, final_grid_position + Vector2i(0, get_nodes_grid_size(input_nodes).y / 2), true, total_area);
 
-	return total_area;
+	p_chunk_rect = total_area;
+
+	return true;
 }
 
 void GraphEditArranger::arrange_connected_nodes(Vector<GraphNode *> p_connected_nodes, Vector2i p_suggested_position, bool p_use_extra_offsets, Rect2i &p_total_area) {
@@ -93,7 +98,7 @@ void GraphEditArranger::arrange_connected_nodes(Vector<GraphNode *> p_connected_
 				local_suggested_position -= get_node_grid_size(graph_node);
 			}
 			Rect2i arranged_node_area;
-			bool could_arrange = arrange_node(graph_node, local_suggested_position, &arranged_node_area);
+			bool could_arrange = arrange_node(graph_node, local_suggested_position, arranged_node_area);
 
 			if (could_arrange) {
 				p_total_area = p_total_area.merge(arranged_node_area);
@@ -103,28 +108,34 @@ void GraphEditArranger::arrange_connected_nodes(Vector<GraphNode *> p_connected_
 }
 
 Vector<GraphNode *> GraphEditArranger::get_connected_nodes(GraphNode *p_node, SlotType p_slot_type) {
-	Vector<Dictionary *> connections = get_connections_to_node(p_node->get_name(), p_slot_type);
+	List<Ref<GraphEdit::Connection>> graph_connections = get_connections_to_node(p_node->get_name(), p_slot_type);
 
 	Vector<GraphNode *> connected_nodes_list;
 	Vector<int> connected_nodes_indexes_list;
 
-	for (Dictionary *con : connections) {
+	for (Ref<GraphEdit::Connection> con : graph_connections) {
 		GraphNode *connected_node;
-
+		StringName path;
 		switch (p_slot_type) {
 			case IN_PORT:
-				NodePath path = con[FROM_NODE].as_string_name().to_string();
-				connected_node = graph_edit->get_node(&path);
+				path = (*con)->from_node;
+				connected_node = dynamic_cast<GraphNode*>(graph_edit->get_node(NodePath(path)));
 				break;
 			case OUT_PORT:
-				NodePath path = con[FROM_NODE].as_string_name().to_string();
-				connected_node = graph_edit->get_node(&path);
+				path = (*con)->to_node;
+				connected_node = dynamic_cast<GraphNode*>(graph_edit->get_node(NodePath(path)));
 				break;
 		}
 
 		if (connected_node != p_node) {
 			int existing_index = connected_nodes_list.find(connected_node);
-			int other_index = static_cast<int>(con[p_slot_type == IN_PORT ? TO_PORT : FROM_PORT]);
+			int other_index;
+			if (p_slot_type == IN_PORT) {
+				other_index = con->to_port;
+			}
+			else {
+				other_index = con->from_port;
+			}
 
 			if (existing_index == -1) {
 				connected_nodes_list.push_back(connected_node);
@@ -136,26 +147,26 @@ Vector<GraphNode *> GraphEditArranger::get_connected_nodes(GraphNode *p_node, Sl
 		}
 
 		bubble_sort(connected_nodes_list, connected_nodes_indexes_list);
-		return nodes;
+		return connected_nodes_list;
 	}
 }
 
 void GraphEditArranger::bubble_sort(Vector<GraphNode *> &nodes, Vector<int> &indices) {
-	int n = keys.size();
+	int n = nodes.size();
 	bool swapped;
 	do {
 		swapped = false;
 		for (int i = 1; i < n; ++i) {
-			if (keys[i - 1] > keys[i]) {
-				// Swap keys
-				GraphNode *tempKey = keys[i - 1];
-				keys[i - 1] = keys[i];
-				keys[i] = tempKey;
+			if (nodes.get(i - 1) > nodes[i]) {
+				// Swap nodes
+				GraphNode *tempKey = nodes[i - 1];
+				nodes.set(i - 1, nodes[i]);
+				nodes.set(i, tempKey);
 
-				// Swap values
-				int tempValue = values[i - 1];
-				values[i - 1] = values[i];
-				values[i] = tempValue;
+				// Swap indices
+				int tempValue = indices[i - 1];
+				indices.set(i - 1, indices[i]);
+				indices.set(i,tempValue);
 			}
 		}
 		// At the end of each pass, the largest element will be at the end,
@@ -167,12 +178,12 @@ void GraphEditArranger::bubble_sort(Vector<GraphNode *> &nodes, Vector<int> &ind
 GraphNode *GraphEditArranger::get_leftmost_connected_node(GraphNode *p_node) {
 	HashSet<GraphNode *> checked_nodes;
 	int left_distance;
-	GraphNode *graph_node = get_leftmost_connected_node_rec(p_node, &left_distance, &checked_nodes);
+	GraphNode *graph_node = get_leftmost_connected_node_rec(p_node, left_distance, checked_nodes);
 	return graph_node;
 }
 
-GraphNode *GraphEditArranger::get_leftmost_connected_node_rec(GraphNode &p_node, int &p_left_distance, HashSet<GraphNode *> &checked_nodes) {
-	if (!p_node.is_selected()) {
+GraphNode *GraphEditArranger::get_leftmost_connected_node_rec(GraphNode* &p_node, int &p_left_distance, HashSet<GraphNode *> &checked_nodes) {
+	if (!p_node->is_selected()) {
 		p_left_distance = 0;
 		return nullptr;
 	}
@@ -185,8 +196,8 @@ GraphNode *GraphEditArranger::get_leftmost_connected_node_rec(GraphNode &p_node,
 	GraphNode *furthest = nullptr;
 	int furthest_distance = 0;
 
-	compare_leftmost_node(&output_nodes, &furthest, &checked_nodes, &p_node, -1, furthest_distance);
-	compare_leftmost_node(&input_nodes, &furthest, &checked_nodes, &p_node, 1, furthest_distance);
+	compare_leftmost_node(output_nodes, furthest, p_node, checked_nodes,  -1, furthest_distance);
+	compare_leftmost_node(input_nodes, furthest, p_node, checked_nodes, 1, furthest_distance);
 
 	if (!furthest) {
 		p_left_distance = 0;
@@ -200,7 +211,7 @@ GraphNode *GraphEditArranger::get_leftmost_connected_node_rec(GraphNode &p_node,
 void GraphEditArranger::compare_leftmost_node(Vector<GraphNode *> &p_graph_nodes, GraphNode *&p_furthest, GraphNode *&p_graph_node, HashSet<GraphNode *> &p_checked_nodes, int p_distance_modifier, int furthest_distance) {
 	for (GraphNode *graph_node : p_graph_nodes) {
 		int distance;
-		GraphNode *leftmost_node = get_leftmost_connected_node_rec(p_node, distance, p_checked_nodes);
+		GraphNode *leftmost_node = get_leftmost_connected_node_rec(p_graph_node, distance, p_checked_nodes);
 		if (leftmost_node && distance + p_distance_modifier > furthest_distance) {
 			p_furthest = leftmost_node;
 			furthest_distance = distance + p_distance_modifier;
@@ -211,9 +222,9 @@ void GraphEditArranger::compare_leftmost_node(Vector<GraphNode *> &p_graph_nodes
 Vector2i GraphEditArranger::get_nodes_grid_size(Vector<GraphNode *> &p_nodes) {
 	Vector2i grid_size = Vector2i(0, 0);
 	for (GraphNode *node : p_nodes) {
-		grid_size += get_node_grid_size(p_node);
+		grid_size += get_node_grid_size(node);
 	}
-	return grid_size
+	return grid_size;
 }
 
 Vector2i GraphEditArranger::get_node_grid_size(GraphNode *p_node) {
@@ -244,21 +255,25 @@ void GraphEditArranger::union_covered_cells(GraphNode *p_node, Vector2i p_grid_p
 	}
 }
 
-Vector<Dictionary> GraphEditArranger::get_connections_to_node(StringName name, SlotType port) {
-	Vector<Dictionary> connections;
+List<Ref<GraphEdit::Connection>> GraphEditArranger::get_connections_to_node(StringName name, SlotType port) {
+	List<Ref<GraphEdit::Connection>> graph_connections;
 
-	for (Dictionary d : _graph.get_connection_list()) {
+	for (Ref<GraphEdit::Connection> l : graph_edit->get_connection_list()) {
 		switch (port) {
 			case IN_PORT:
-				if (d[_fromNode].as_string_name() == name) {
-					connections.push_back(d);
+				if ((*l)->from_node == name) {
+					graph_connections.push_back(l);
 				}
 				break;
 			case OUT_PORT:
-				if (d[_toNode].as_string_name() ==)
-					break;
+				if ((*l)->to_node == name) {
+					graph_connections.push_back(l);
+				}
+				break;
 		}
 	}
+
+	return graph_connections;
 }
 
 void GraphEditArranger::arrange_nodes() {
@@ -272,8 +287,8 @@ void GraphEditArranger::arrange_nodes() {
 
 	Vector<GraphNode *> graph_nodes;
 
-	for (Node node : graph_edit->get_children()) {
-		GraphNode *graph_node = dynamic_cast<GraphNode *>(node);
+	for (int i = graph_edit->get_child_count() - 1; i >= 0; i--) {
+		GraphNode *graph_node = Object::cast_to<GraphNode>(graph_edit->get_child(i));
 		if (graph_node != nullptr && graph_node->is_selected()) {
 			graph_nodes.push_back(graph_node);
 		}
@@ -285,7 +300,7 @@ void GraphEditArranger::arrange_nodes() {
 			Vector2i position = static_cast<Vector2i>(leftmost_node->get_position_offset() / cell_size);
 
 			Rect2i chunk_rect;
-			bool could_get_chunk_rect = arrange_chunk(leftmost_node, position, &chunk_rect);
+			bool could_get_chunk_rect = arrange_chunk(leftmost_node, position, chunk_rect);
 			if (!could_get_chunk_rect) {
 				chunk_rects.push_back(chunk_rect);
 			}
