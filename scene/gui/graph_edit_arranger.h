@@ -53,6 +53,7 @@ private:
 	const String TO_PORT = "to_port";
 	
 	bool arranging_graph = false;
+	
 
 	Vector2i cell_padding = Vector2i(1,1);
 	Vector2i cell_size = Vector2i(100,25);
