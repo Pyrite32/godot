@@ -373,8 +373,8 @@ void SoftBody3D::_bind_methods() {
 	BIND_ENUM_CONSTANT(DISABLE_MODE_KEEP_ACTIVE);
 }
 
-PackedStringArray SoftBody3D::get_configuration_warnings() const {
-	PackedStringArray warnings = Node::get_configuration_warnings();
+Array SoftBody3D::get_configuration_warnings() const {
+	Array warnings = Node::get_configuration_warnings();
 
 	if (mesh.is_null()) {
 		warnings.push_back(RTR("This body will be ignored until you set a mesh."));
@@ -713,9 +713,6 @@ void SoftBody3D::_update_cache_pin_points_datas() {
 	for (int i = pinned_points.size() - 1; 0 <= i; --i) {
 		if (!w[i].spatial_attachment_path.is_empty()) {
 			w[i].spatial_attachment = Object::cast_to<Node3D>(get_node(w[i].spatial_attachment_path));
-		}
-		if (!w[i].spatial_attachment) {
-			ERR_PRINT("Node3D node not defined in the pinned point, this is undefined behavior for SoftBody3D!");
 		}
 	}
 }

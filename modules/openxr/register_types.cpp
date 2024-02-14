@@ -44,11 +44,11 @@
 #include "extensions/openxr_composition_layer_depth_extension.h"
 #include "extensions/openxr_eye_gaze_interaction.h"
 #include "extensions/openxr_fb_display_refresh_rate_extension.h"
-#include "extensions/openxr_fb_passthrough_extension_wrapper.h"
 #include "extensions/openxr_hand_tracking_extension.h"
 #include "extensions/openxr_htc_controller_extension.h"
 #include "extensions/openxr_htc_vive_tracker_extension.h"
 #include "extensions/openxr_huawei_controller_extension.h"
+#include "extensions/openxr_local_floor_extension.h"
 #include "extensions/openxr_meta_controller_extension.h"
 #include "extensions/openxr_ml2_controller_extension.h"
 #include "extensions/openxr_palm_pose_extension.h"
@@ -60,7 +60,7 @@
 #endif
 
 #ifdef ANDROID_ENABLED
-#include "extensions/openxr_android_extension.h"
+#include "extensions/platform/openxr_android_extension.h"
 #endif
 
 #include "core/config/project_settings.h"
@@ -107,12 +107,12 @@ void initialize_openxr_module(ModuleInitializationLevel p_level) {
 
 			// register our other extensions
 			OpenXRAPI::register_extension_wrapper(memnew(OpenXRPalmPoseExtension));
+			OpenXRAPI::register_extension_wrapper(memnew(OpenXRLocalFloorExtension));
 			OpenXRAPI::register_extension_wrapper(memnew(OpenXRPicoControllerExtension));
 			OpenXRAPI::register_extension_wrapper(memnew(OpenXRCompositionLayerDepthExtension));
 			OpenXRAPI::register_extension_wrapper(memnew(OpenXRHTCControllerExtension));
 			OpenXRAPI::register_extension_wrapper(memnew(OpenXRHTCViveTrackerExtension));
 			OpenXRAPI::register_extension_wrapper(memnew(OpenXRHuaweiControllerExtension));
-			OpenXRAPI::register_extension_wrapper(memnew(OpenXRFbPassthroughExtensionWrapper));
 			OpenXRAPI::register_extension_wrapper(memnew(OpenXRDisplayRefreshRateExtension));
 			OpenXRAPI::register_extension_wrapper(memnew(OpenXRWMRControllerExtension));
 			OpenXRAPI::register_extension_wrapper(memnew(OpenXRML2ControllerExtension));

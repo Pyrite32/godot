@@ -31,6 +31,7 @@
 #include "gdscript_parser.h"
 
 #include "gdscript.h"
+#include "gdscript_tokenizer_buffer.h"
 
 #include "core/config/project_settings.h"
 #include "core/io/file_access.h"
@@ -93,7 +94,6 @@ bool GDScriptParser::annotation_exists(const String &p_annotation_name) const {
 GDScriptParser::GDScriptParser() {
 	// Register valid annotations.
 	if (unlikely(valid_annotations.is_empty())) {
-		register_annotation(MethodInfo("@uid", PropertyInfo(Variant::STRING, "uid")), AnnotationInfo::SCRIPT, &GDScriptParser::uid_annotation);
 		register_annotation(MethodInfo("@tool"), AnnotationInfo::SCRIPT, &GDScriptParser::tool_annotation);
 		register_annotation(MethodInfo("@icon", PropertyInfo(Variant::STRING, "icon_path")), AnnotationInfo::SCRIPT, &GDScriptParser::icon_annotation);
 		register_annotation(MethodInfo("@static_unload"), AnnotationInfo::SCRIPT, &GDScriptParser::static_unload_annotation);
@@ -227,7 +227,7 @@ void GDScriptParser::make_completion_context(CompletionType p_type, Node *p_node
 	if (!for_completion || (!p_force && completion_context.type != COMPLETION_NONE)) {
 		return;
 	}
-	if (previous.cursor_place != GDScriptTokenizer::CURSOR_MIDDLE && previous.cursor_place != GDScriptTokenizer::CURSOR_END && current.cursor_place == GDScriptTokenizer::CURSOR_NONE) {
+	if (previous.cursor_place != GDScriptTokenizerText::CURSOR_MIDDLE && previous.cursor_place != GDScriptTokenizerText::CURSOR_END && current.cursor_place == GDScriptTokenizerText::CURSOR_NONE) {
 		return;
 	}
 	CompletionContext context;
@@ -235,7 +235,7 @@ void GDScriptParser::make_completion_context(CompletionType p_type, Node *p_node
 	context.current_class = current_class;
 	context.current_function = current_function;
 	context.current_suite = current_suite;
-	context.current_line = tokenizer.get_cursor_line();
+	context.current_line = tokenizer->get_cursor_line();
 	context.current_argument = p_argument;
 	context.node = p_node;
 	completion_context = context;
@@ -245,7 +245,7 @@ void GDScriptParser::make_completion_context(CompletionType p_type, Variant::Typ
 	if (!for_completion || (!p_force && completion_context.type != COMPLETION_NONE)) {
 		return;
 	}
-	if (previous.cursor_place != GDScriptTokenizer::CURSOR_MIDDLE && previous.cursor_place != GDScriptTokenizer::CURSOR_END && current.cursor_place == GDScriptTokenizer::CURSOR_NONE) {
+	if (previous.cursor_place != GDScriptTokenizerText::CURSOR_MIDDLE && previous.cursor_place != GDScriptTokenizerText::CURSOR_END && current.cursor_place == GDScriptTokenizerText::CURSOR_NONE) {
 		return;
 	}
 	CompletionContext context;
@@ -253,7 +253,7 @@ void GDScriptParser::make_completion_context(CompletionType p_type, Variant::Typ
 	context.current_class = current_class;
 	context.current_function = current_function;
 	context.current_suite = current_suite;
-	context.current_line = tokenizer.get_cursor_line();
+	context.current_line = tokenizer->get_cursor_line();
 	context.builtin_type = p_builtin_type;
 	completion_context = context;
 }
@@ -266,7 +266,7 @@ void GDScriptParser::push_completion_call(Node *p_call) {
 	call.call = p_call;
 	call.argument = 0;
 	completion_call_stack.push_back(call);
-	if (previous.cursor_place == GDScriptTokenizer::CURSOR_MIDDLE || previous.cursor_place == GDScriptTokenizer::CURSOR_END || current.cursor_place == GDScriptTokenizer::CURSOR_BEGINNING) {
+	if (previous.cursor_place == GDScriptTokenizerText::CURSOR_MIDDLE || previous.cursor_place == GDScriptTokenizerText::CURSOR_END || current.cursor_place == GDScriptTokenizerText::CURSOR_BEGINNING) {
 		completion_call = call;
 	}
 }
@@ -329,17 +329,21 @@ Error GDScriptParser::parse(const String &p_source_code, const String &p_script_
 		source = source.replace_first(String::chr(0xFFFF), String());
 	}
 
-	tokenizer.set_source_code(source);
-	tokenizer.set_cursor_position(cursor_line, cursor_column);
-	script_path = p_script_path;
-	current = tokenizer.scan();
+	GDScriptTokenizerText *text_tokenizer = memnew(GDScriptTokenizerText);
+	text_tokenizer->set_source_code(source);
+
+	tokenizer = text_tokenizer;
+
+	tokenizer->set_cursor_position(cursor_line, cursor_column);
+	script_path = p_script_path.simplify_path();
+	current = tokenizer->scan();
 	// Avoid error or newline as the first token.
 	// The latter can mess with the parser when opening files filled exclusively with comments and newlines.
 	while (current.type == GDScriptTokenizer::Token::ERROR || current.type == GDScriptTokenizer::Token::NEWLINE) {
 		if (current.type == GDScriptTokenizer::Token::ERROR) {
 			push_error(current.literal);
 		}
-		current = tokenizer.scan();
+		current = tokenizer->scan();
 	}
 
 #ifdef DEBUG_ENABLED
@@ -360,11 +364,49 @@ Error GDScriptParser::parse(const String &p_source_code, const String &p_script_
 	parse_program();
 	pop_multiline();
 
+	memdelete(text_tokenizer);
+	tokenizer = nullptr;
+
 #ifdef DEBUG_ENABLED
 	if (multiline_stack.size() > 0) {
 		ERR_PRINT("Parser bug: Imbalanced multiline stack.");
 	}
 #endif
+
+	if (errors.is_empty()) {
+		return OK;
+	} else {
+		return ERR_PARSE_ERROR;
+	}
+}
+
+Error GDScriptParser::parse_binary(const Vector<uint8_t> &p_binary, const String &p_script_path) {
+	GDScriptTokenizerBuffer *buffer_tokenizer = memnew(GDScriptTokenizerBuffer);
+	Error err = buffer_tokenizer->set_code_buffer(p_binary);
+
+	if (err) {
+		memdelete(buffer_tokenizer);
+		return err;
+	}
+
+	tokenizer = buffer_tokenizer;
+	script_path = p_script_path;
+	current = tokenizer->scan();
+	// Avoid error or newline as the first token.
+	// The latter can mess with the parser when opening files filled exclusively with comments and newlines.
+	while (current.type == GDScriptTokenizer::Token::ERROR || current.type == GDScriptTokenizer::Token::NEWLINE) {
+		if (current.type == GDScriptTokenizer::Token::ERROR) {
+			push_error(current.literal);
+		}
+		current = tokenizer->scan();
+	}
+
+	push_multiline(false); // Keep one for the whole parsing.
+	parse_program();
+	pop_multiline();
+
+	memdelete(buffer_tokenizer);
+	tokenizer = nullptr;
 
 	if (errors.is_empty()) {
 		return OK;
@@ -380,16 +422,16 @@ GDScriptTokenizer::Token GDScriptParser::advance() {
 		ERR_FAIL_COND_V_MSG(current.type == GDScriptTokenizer::Token::TK_EOF, current, "GDScript parser bug: Trying to advance past the end of stream.");
 	}
 	if (for_completion && !completion_call_stack.is_empty()) {
-		if (completion_call.call == nullptr && tokenizer.is_past_cursor()) {
+		if (completion_call.call == nullptr && tokenizer->is_past_cursor()) {
 			completion_call = completion_call_stack.back()->get();
 			passed_cursor = true;
 		}
 	}
 	previous = current;
-	current = tokenizer.scan();
+	current = tokenizer->scan();
 	while (current.type == GDScriptTokenizer::Token::ERROR) {
 		push_error(current.literal);
-		current = tokenizer.scan();
+		current = tokenizer->scan();
 	}
 	if (previous.type != GDScriptTokenizer::Token::DEDENT) { // `DEDENT` belongs to the next non-empty line.
 		for (Node *n : nodes_in_progress) {
@@ -458,19 +500,19 @@ void GDScriptParser::synchronize() {
 
 void GDScriptParser::push_multiline(bool p_state) {
 	multiline_stack.push_back(p_state);
-	tokenizer.set_multiline_mode(p_state);
+	tokenizer->set_multiline_mode(p_state);
 	if (p_state) {
 		// Consume potential whitespace tokens already waiting in line.
 		while (current.type == GDScriptTokenizer::Token::NEWLINE || current.type == GDScriptTokenizer::Token::INDENT || current.type == GDScriptTokenizer::Token::DEDENT) {
-			current = tokenizer.scan(); // Don't call advance() here, as we don't want to change the previous token.
+			current = tokenizer->scan(); // Don't call advance() here, as we don't want to change the previous token.
 		}
 	}
 }
 
 void GDScriptParser::pop_multiline() {
-	ERR_FAIL_COND_MSG(multiline_stack.size() == 0, "Parser bug: trying to pop from multiline stack without available value.");
+	ERR_FAIL_COND_MSG(multiline_stack.is_empty(), "Parser bug: trying to pop from multiline stack without available value.");
 	multiline_stack.pop_back();
-	tokenizer.set_multiline_mode(multiline_stack.size() > 0 ? multiline_stack.back()->get() : false);
+	tokenizer->set_multiline_mode(multiline_stack.size() > 0 ? multiline_stack.back()->get() : false);
 }
 
 bool GDScriptParser::is_statement_end_token() const {
@@ -520,8 +562,6 @@ void GDScriptParser::parse_program() {
 				if (annotation->applies_to(AnnotationInfo::SCRIPT)) {
 					// `@icon` needs to be applied in the parser. See GH-72444.
 					if (annotation->name == SNAME("@icon")) {
-						annotation->apply(this, head, nullptr);
-					} else if (annotation->name == SNAME("@uid")) {
 						annotation->apply(this, head, nullptr);
 					} else {
 						head->annotations.push_back(annotation);
@@ -591,7 +631,7 @@ void GDScriptParser::parse_program() {
 	complete_extents(head);
 
 #ifdef TOOLS_ENABLED
-	const HashMap<int, GDScriptTokenizer::CommentData> &comments = tokenizer.get_comments();
+	const HashMap<int, GDScriptTokenizer::CommentData> &comments = tokenizer->get_comments();
 	int line = MIN(max_script_doc_line, head->end_line);
 	while (line > 0) {
 		if (comments.has(line) && comments[line].new_line && comments[line].comment.begins_with("##")) {
@@ -600,6 +640,7 @@ void GDScriptParser::parse_program() {
 		}
 		line--;
 	}
+
 #endif // TOOLS_ENABLED
 
 	if (!check(GDScriptTokenizer::Token::TK_EOF)) {
@@ -796,7 +837,7 @@ void GDScriptParser::parse_class_member(T *(GDScriptParser::*p_parse_function)(b
 		if (has_comment(member->start_line, true)) {
 			// Inline doc comment.
 			member->doc_data = parse_class_doc_comment(member->start_line, true);
-		} else if (has_comment(doc_comment_line, true) && tokenizer.get_comments()[doc_comment_line].new_line) {
+		} else if (has_comment(doc_comment_line, true) && tokenizer->get_comments()[doc_comment_line].new_line) {
 			// Normal doc comment. Don't check `min_member_doc_line` because a class ends parsing after its members.
 			// This may not work correctly for cases like `var a; class B`, but it doesn't matter in practice.
 			member->doc_data = parse_class_doc_comment(doc_comment_line);
@@ -805,7 +846,7 @@ void GDScriptParser::parse_class_member(T *(GDScriptParser::*p_parse_function)(b
 		if (has_comment(member->start_line, true)) {
 			// Inline doc comment.
 			member->doc_data = parse_doc_comment(member->start_line, true);
-		} else if (doc_comment_line >= min_member_doc_line && has_comment(doc_comment_line, true) && tokenizer.get_comments()[doc_comment_line].new_line) {
+		} else if (doc_comment_line >= min_member_doc_line && has_comment(doc_comment_line, true) && tokenizer->get_comments()[doc_comment_line].new_line) {
 			// Normal doc comment.
 			member->doc_data = parse_doc_comment(doc_comment_line);
 		}
@@ -1360,7 +1401,7 @@ GDScriptParser::EnumNode *GDScriptParser::parse_enum(bool p_is_static) {
 			if (i == enum_node->values.size() - 1 || enum_node->values[i + 1].line > enum_value_line) {
 				doc_data = parse_doc_comment(enum_value_line, true);
 			}
-		} else if (doc_comment_line >= min_enum_value_doc_line && has_comment(doc_comment_line, true) && tokenizer.get_comments()[doc_comment_line].new_line) {
+		} else if (doc_comment_line >= min_enum_value_doc_line && has_comment(doc_comment_line, true) && tokenizer->get_comments()[doc_comment_line].new_line) {
 			// Normal doc comment.
 			doc_data = parse_doc_comment(doc_comment_line);
 		}
@@ -2349,6 +2390,9 @@ GDScriptParser::ExpressionNode *GDScriptParser::parse_identifier(ExpressionNode 
 	IdentifierNode *identifier = alloc_node<IdentifierNode>();
 	complete_extents(identifier);
 	identifier->name = previous.get_identifier();
+	if (identifier->name.operator String().is_empty()) {
+		print_line("Empty identifier found.");
+	}
 	identifier->suite = current_suite;
 
 	if (current_suite != nullptr && current_suite->has_local(identifier->name)) {
@@ -3053,7 +3097,7 @@ GDScriptParser::ExpressionNode *GDScriptParser::parse_call(ExpressionNode *p_pre
 			// Allow for trailing comma.
 			break;
 		}
-		bool use_identifier_completion = current.cursor_place == GDScriptTokenizer::CURSOR_END || current.cursor_place == GDScriptTokenizer::CURSOR_MIDDLE;
+		bool use_identifier_completion = current.cursor_place == GDScriptTokenizerText::CURSOR_END || current.cursor_place == GDScriptTokenizerText::CURSOR_MIDDLE;
 		ExpressionNode *argument = parse_expression(false);
 		if (argument == nullptr) {
 			push_error(R"(Expected expression as the function argument.)");
@@ -3223,7 +3267,7 @@ GDScriptParser::ExpressionNode *GDScriptParser::parse_lambda(ExpressionNode *p_p
 	// Reset the multiline stack since we don't want the multiline mode one in the lambda body.
 	push_multiline(false);
 	if (multiline_context) {
-		tokenizer.push_expression_indented_block();
+		tokenizer->push_expression_indented_block();
 	}
 
 	push_multiline(true); // For the parameters.
@@ -3270,9 +3314,9 @@ GDScriptParser::ExpressionNode *GDScriptParser::parse_lambda(ExpressionNode *p_p
 	if (multiline_context) {
 		// If we're in multiline mode, we want to skip the spurious DEDENT and NEWLINE tokens.
 		while (check(GDScriptTokenizer::Token::DEDENT) || check(GDScriptTokenizer::Token::INDENT) || check(GDScriptTokenizer::Token::NEWLINE)) {
-			current = tokenizer.scan(); // Not advance() since we don't want to change the previous token.
+			current = tokenizer->scan(); // Not advance() since we don't want to change the previous token.
 		}
-		tokenizer.pop_expression_indented_block();
+		tokenizer->pop_expression_indented_block();
 	}
 
 	current_function = previous_function;
@@ -3288,6 +3332,19 @@ GDScriptParser::ExpressionNode *GDScriptParser::parse_lambda(ExpressionNode *p_p
 }
 
 GDScriptParser::ExpressionNode *GDScriptParser::parse_type_test(ExpressionNode *p_previous_operand, bool p_can_assign) {
+	// x is not int
+	// ^        ^^^ ExpressionNode, TypeNode
+	// ^^^^^^^^^^^^ TypeTestNode
+	// ^^^^^^^^^^^^ UnaryOpNode
+	UnaryOpNode *not_node = nullptr;
+	if (match(GDScriptTokenizer::Token::NOT)) {
+		not_node = alloc_node<UnaryOpNode>();
+		not_node->operation = UnaryOpNode::OP_LOGIC_NOT;
+		not_node->variant_op = Variant::OP_NOT;
+		reset_extents(not_node, p_previous_operand);
+		update_extents(not_node);
+	}
+
 	TypeTestNode *type_test = alloc_node<TypeTestNode>();
 	reset_extents(type_test, p_previous_operand);
 	update_extents(type_test);
@@ -3296,8 +3353,21 @@ GDScriptParser::ExpressionNode *GDScriptParser::parse_type_test(ExpressionNode *
 	type_test->test_type = parse_type();
 	complete_extents(type_test);
 
+	if (not_node != nullptr) {
+		not_node->operand = type_test;
+		complete_extents(not_node);
+	}
+
 	if (type_test->test_type == nullptr) {
-		push_error(R"(Expected type specifier after "is".)");
+		if (not_node == nullptr) {
+			push_error(R"(Expected type specifier after "is".)");
+		} else {
+			push_error(R"(Expected type specifier after "is not".)");
+		}
+	}
+
+	if (not_node != nullptr) {
+		return not_node;
 	}
 
 	return type_test;
@@ -3495,20 +3565,20 @@ static String _process_doc_line(const String &p_line, const String &p_text, cons
 }
 
 bool GDScriptParser::has_comment(int p_line, bool p_must_be_doc) {
-	bool has_comment = tokenizer.get_comments().has(p_line);
+	bool has_comment = tokenizer->get_comments().has(p_line);
 	// If there are no comments or if we don't care whether the comment
 	// is a docstring, we have our result.
 	if (!p_must_be_doc || !has_comment) {
 		return has_comment;
 	}
 
-	return tokenizer.get_comments()[p_line].comment.begins_with("##");
+	return tokenizer->get_comments()[p_line].comment.begins_with("##");
 }
 
 GDScriptParser::MemberDocData GDScriptParser::parse_doc_comment(int p_line, bool p_single_line) {
 	ERR_FAIL_COND_V(!has_comment(p_line, true), MemberDocData());
 
-	const HashMap<int, GDScriptTokenizer::CommentData> &comments = tokenizer.get_comments();
+	const HashMap<int, GDScriptTokenizer::CommentData> &comments = tokenizer->get_comments();
 	int line = p_line;
 
 	if (!p_single_line) {
@@ -3557,7 +3627,7 @@ GDScriptParser::MemberDocData GDScriptParser::parse_doc_comment(int p_line, bool
 GDScriptParser::ClassDocData GDScriptParser::parse_class_doc_comment(int p_line, bool p_single_line) {
 	ERR_FAIL_COND_V(!has_comment(p_line, true), ClassDocData());
 
-	const HashMap<int, GDScriptTokenizer::CommentData> &comments = tokenizer.get_comments();
+	const HashMap<int, GDScriptTokenizer::CommentData> &comments = tokenizer->get_comments();
 	int line = p_line;
 
 	if (!p_single_line) {
@@ -3837,18 +3907,18 @@ bool GDScriptParser::validate_annotation_arguments(AnnotationNode *p_annotation)
 	}
 
 	// `@icon`'s argument needs to be resolved in the parser. See GH-72444.
-	if (p_annotation->name == SNAME("@icon") || p_annotation->name == SNAME("@uid")) {
+	if (p_annotation->name == SNAME("@icon")) {
 		ExpressionNode *argument = p_annotation->arguments[0];
 
 		if (argument->type != Node::LITERAL) {
-			push_error(vformat(R"(Argument 1 of annotation "%s" must be a string literal.)", p_annotation->name), argument);
+			push_error(R"(Argument 1 of annotation "@icon" must be a string literal.)", argument);
 			return false;
 		}
 
 		Variant value = static_cast<LiteralNode *>(argument)->value;
 
 		if (value.get_type() != Variant::STRING) {
-			push_error(vformat(R"(Argument 1 of annotation "%s" must be a string literal.)", p_annotation->name), argument);
+			push_error(R"(Argument 1 of annotation "@icon" must be a string literal.)", argument);
 			return false;
 		}
 
@@ -3860,43 +3930,14 @@ bool GDScriptParser::validate_annotation_arguments(AnnotationNode *p_annotation)
 	return true;
 }
 
-bool GDScriptParser::uid_annotation(const AnnotationNode *p_annotation, Node *p_target, ClassNode *p_class) {
-	ERR_FAIL_COND_V_MSG(p_target->type != Node::CLASS, false, R"("@uid" annotation can only be applied to classes.)");
-	ERR_FAIL_COND_V(p_annotation->resolved_arguments.is_empty(), false);
-
-#ifdef DEBUG_ENABLED
-	if (this->_has_uid) {
-		push_error(R"("@uid" annotation can only be used once.)", p_annotation);
-		return false;
-	}
-#endif // DEBUG_ENABLED
-
-	// Assign line range early to allow replacing invalid UIDs.
-	ClassNode *class_node = static_cast<ClassNode *>(p_target);
-	class_node->uid_lines = Vector2i(p_annotation->start_line - 1, p_annotation->end_line - 1); // Lines start from 1, so need to subtract.
-
-	const String &uid_string = p_annotation->resolved_arguments[0];
-#ifdef DEBUG_ENABLED
-	if (ResourceUID::get_singleton()->text_to_id(uid_string) == ResourceUID::INVALID_ID) {
-		push_error(R"(The annotated UID is invalid.)", p_annotation);
-		return false;
-	}
-#endif // DEBUG_ENABLED
-
-	class_node->uid_string = uid_string;
-
-	this->_has_uid = true;
-	return true;
-}
-
 bool GDScriptParser::tool_annotation(const AnnotationNode *p_annotation, Node *p_target, ClassNode *p_class) {
 #ifdef DEBUG_ENABLED
-	if (this->_is_tool) {
+	if (_is_tool) {
 		push_error(R"("@tool" annotation can only be used once.)", p_annotation);
 		return false;
 	}
 #endif // DEBUG_ENABLED
-	this->_is_tool = true;
+	_is_tool = true;
 	return true;
 }
 
@@ -5033,6 +5074,9 @@ void GDScriptParser::TreePrinter::print_function(FunctionNode *p_function, const
 	for (const AnnotationNode *E : p_function->annotations) {
 		print_annotation(E);
 	}
+	if (p_function->is_static) {
+		push_text("Static ");
+	}
 	push_text(p_context);
 	push_text(" ");
 	if (p_function->identifier) {
@@ -5377,6 +5421,9 @@ void GDScriptParser::TreePrinter::print_variable(VariableNode *p_variable) {
 		print_annotation(E);
 	}
 
+	if (p_variable->is_static) {
+		push_text("Static ");
+	}
 	push_text("Variable ");
 	print_identifier(p_variable->identifier);
 

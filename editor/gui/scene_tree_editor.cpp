@@ -132,20 +132,13 @@ void SceneTreeEditor::_cell_button_pressed(Object *p_item, int p_column, int p_i
 		}
 		undo_redo->commit_action();
 	} else if (p_id == BUTTON_WARNING) {
-		String config_err = n->get_configuration_warnings_as_string();
-		if (config_err.is_empty()) {
+		const PackedStringArray warnings = n->get_configuration_warnings_as_strings(true);
+		if (warnings.is_empty()) {
 			return;
 		}
 
-		const PackedInt32Array boundaries = TS->string_get_word_breaks(config_err, "", 80);
-		PackedStringArray lines;
-		for (int i = 0; i < boundaries.size(); i += 2) {
-			const int start = boundaries[i];
-			const int end = boundaries[i + 1];
-			lines.append(config_err.substr(start, end - start + 1));
-		}
-
-		warning->set_text(String("\n").join(lines));
+		const String warning_lines = String("\n").join(warnings);
+		warning->set_text(warning_lines);
 		warning->popup_centered();
 
 	} else if (p_id == BUTTON_SIGNALS) {
@@ -282,31 +275,12 @@ void SceneTreeEditor::_add_nodes(Node *p_node, TreeItem *p_parent) {
 
 	if (can_rename) { //should be can edit..
 
-		String conf_warning = p_node->get_configuration_warnings_as_string();
-		if (!conf_warning.is_empty()) {
-			const int num_warnings = p_node->get_configuration_warnings().size();
-			String warning_icon;
-			if (num_warnings == 1) {
-				warning_icon = SNAME("NodeWarning");
-			} else if (num_warnings <= 3) {
-				warning_icon = vformat("NodeWarnings%d", num_warnings);
-			} else {
-				warning_icon = SNAME("NodeWarnings4Plus");
-			}
-
-			// Improve looks on tooltip, extra spacing on non-bullet point newlines.
-			const String bullet_point = U"•  ";
-			int next_newline = 0;
-			while (next_newline != -1) {
-				next_newline = conf_warning.find("\n", next_newline + 2);
-				if (conf_warning.substr(next_newline + 1, bullet_point.length()) != bullet_point) {
-					conf_warning = conf_warning.insert(next_newline + 1, "    ");
-				}
-			}
-
-			String newline = (num_warnings == 1 ? "\n" : "\n\n");
-
-			item->add_button(0, get_editor_theme_icon(warning_icon), BUTTON_WARNING, false, TTR("Node configuration warning:") + newline + conf_warning);
+		const PackedStringArray warnings = p_node->get_configuration_warnings_as_strings(false);
+		const int num_warnings = warnings.size();
+		if (num_warnings > 0) {
+			const StringName warning_icon = Node::get_configuration_warning_icon(num_warnings);
+			const String warning_lines = String("\n\n").join(warnings);
+			item->add_button(0, get_editor_theme_icon(warning_icon), BUTTON_WARNING, false, TTR("Node configuration warning:") + "\n\n" + warning_lines);
 		}
 
 		if (p_node->is_unique_name_in_owner()) {
@@ -1051,10 +1025,9 @@ void SceneTreeEditor::_rename_node(Node *p_node, const String &p_name) {
 		}
 	}
 
+	new_name = p_node->get_parent()->prevalidate_child_name(p_node, new_name);
 	if (new_name == p_node->get_name()) {
-		if (item->get_text(0).is_empty()) {
-			item->set_text(0, new_name);
-		}
+		item->set_text(0, new_name);
 		return;
 	}
 
@@ -1545,6 +1518,7 @@ SceneTreeEditor::SceneTreeEditor(bool p_label, bool p_can_rename, bool p_can_ope
 	warning = memnew(AcceptDialog);
 	add_child(warning);
 	warning->set_title(TTR("Node Configuration Warning!"));
+	warning->set_flag(Window::FLAG_POPUP, true);
 
 	last_hash = 0;
 	blocked = 0;

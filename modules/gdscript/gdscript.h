@@ -176,6 +176,7 @@ private:
 	bool clearing = false;
 	//exported members
 	String source;
+	Vector<uint8_t> binary_tokens;
 	String path;
 	bool path_valid = false; // False if using default path.
 	StringName local_name; // Inner class identifier or `class_name`.
@@ -212,7 +213,8 @@ private:
 	void _get_script_signal_list(List<MethodInfo> *r_list, bool p_include_base) const;
 
 	GDScript *_get_gdscript_from_variant(const Variant &p_variant);
-	void _get_dependencies(RBSet<GDScript *> &p_dependencies, const GDScript *p_except);
+	void _collect_function_dependencies(GDScriptFunction *p_func, RBSet<GDScript *> &p_dependencies, const GDScript *p_except);
+	void _collect_dependencies(RBSet<GDScript *> &p_dependencies, const GDScript *p_except);
 
 protected:
 	bool _get(const StringName &p_name, Variant &r_ret) const;
@@ -262,10 +264,6 @@ public:
 	bool is_tool() const override { return tool; }
 	Ref<GDScript> get_base() const;
 
-	static String get_raw_source_code(const String &p_path, bool *r_error = nullptr);
-	static Vector2i get_uid_lines(const String &p_source);
-	static String create_uid_line(const String &p_uid_str);
-
 	const HashMap<StringName, MemberInfo> &debug_get_member_indices() const { return member_indices; }
 	const HashMap<StringName, GDScriptFunction *> &debug_get_member_functions() const; //this is debug only
 	StringName debug_get_member_by_index(int p_idx) const;
@@ -299,6 +297,10 @@ public:
 	virtual void set_path(const String &p_path, bool p_take_over = false) override;
 	String get_script_path() const;
 	Error load_source_code(const String &p_path);
+
+	void set_binary_tokens_source(const Vector<uint8_t> &p_binary_tokens);
+	const Vector<uint8_t> &get_binary_tokens_source() const;
+	Vector<uint8_t> get_as_binary_tokens() const;
 
 	bool get_property_default_value(const StringName &p_property, Variant &r_value) const override;
 
@@ -620,7 +622,6 @@ public:
 	virtual void get_recognized_extensions(List<String> *p_extensions) const;
 	virtual bool handles_type(const String &p_type) const;
 	virtual String get_resource_type(const String &p_path) const;
-	virtual ResourceUID::ID get_resource_uid(const String &p_path) const;
 	virtual void get_dependencies(const String &p_path, List<String> *p_dependencies, bool p_add_types = false);
 };
 
@@ -629,7 +630,6 @@ public:
 	virtual Error save(const Ref<Resource> &p_resource, const String &p_path, uint32_t p_flags = 0);
 	virtual void get_recognized_extensions(const Ref<Resource> &p_resource, List<String> *p_extensions) const;
 	virtual bool recognize(const Ref<Resource> &p_resource) const;
-	virtual Error set_uid(const String &p_path, ResourceUID::ID p_uid);
 };
 
 #endif // GDSCRIPT_H

@@ -488,6 +488,8 @@ private:
 
 	String _get_system_info() const;
 
+	bool _should_display_update_spinner() const;
+
 	static void _dependency_error_report(const String &p_path, const String &p_dep, const String &p_type) {
 		DEV_ASSERT(Thread::get_caller_id() == Thread::get_main_id());
 		if (!singleton->dependency_errors.has(p_path)) {
@@ -516,7 +518,8 @@ private:
 
 	void _dialog_action(String p_file);
 
-	void _edit_current(bool p_skip_foreign = false);
+	void _add_to_history(const Object *p_object, const String &p_property, bool p_inspector_only);
+	void _edit_current(bool p_skip_foreign = false, bool p_skip_inspector_update = false);
 	void _dialog_display_save_error(String p_file, Error p_error);
 	void _dialog_display_load_error(String p_file, Error p_error);
 
@@ -584,6 +587,7 @@ private:
 	void _dropped_files(const Vector<String> &p_files);
 	void _add_dropped_files_recursive(const Vector<String> &p_files, String to_path);
 
+	void _update_vsync_mode();
 	void _update_from_settings();
 	void _gdextensions_reloaded();
 
@@ -654,8 +658,10 @@ private:
 	void _immediate_dialog_confirmed();
 	void _select_default_main_screen_plugin();
 
+	void _bottom_panel_switch_by_control(bool p_enable, Control *p_control);
 	void _bottom_panel_switch(bool p_enable, int p_idx);
 	void _bottom_panel_raise_toggled(bool);
+	bool _bottom_panel_drag_hover(const Vector2 &, const Variant &, Button *p_button, Control *p_control);
 
 	void _begin_first_scan();
 
@@ -747,6 +753,7 @@ public:
 	void show_about() { _menu_option_confirm(HELP_ABOUT, false); }
 
 	void push_item(Object *p_object, const String &p_property = "", bool p_inspector_only = false);
+	void push_item_no_inspector(Object *p_object);
 	void edit_item(Object *p_object, Object *p_editing_owner);
 	void push_node_item(Node *p_node);
 	void hide_unused_editors(const Object *p_editing_owner = nullptr);
@@ -757,6 +764,8 @@ public:
 	void edit_foreign_resource(Ref<Resource> p_resource);
 
 	bool is_resource_read_only(Ref<Resource> p_resource, bool p_foreign_resources_are_writable = false);
+
+	String get_multiwindow_support_tooltip_text() const;
 
 	bool is_changing_scene() const;
 
@@ -807,6 +816,7 @@ public:
 			List<AdditiveNodeEntry> &p_addition_list);
 
 	bool is_scene_open(const String &p_path);
+	bool is_multi_window_enabled() const;
 
 	void setup_color_picker(ColorPicker *p_picker);
 
@@ -863,7 +873,7 @@ public:
 
 	bool is_exiting() const { return exiting; }
 
-	Button *add_bottom_panel_item(String p_text, Control *p_item);
+	Button *add_bottom_panel_item(String p_text, Control *p_item, bool p_at_front = false);
 	void make_bottom_panel_item_visible(Control *p_item);
 	void raise_bottom_panel_item(Control *p_item);
 	void hide_bottom_panel();
